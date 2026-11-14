@@ -1,0 +1,209 @@
+!pip install https://github.com/soft-matter/trackpy/archive/master.zip
+!pip install pyyaml
+!pip install trackpy
+!pip install pims
+import matplotlib.pyplot as plt
+import scipy
+import looseversion
+import trackpy as tp
+import pandas as pd
+import yaml
+import numpy as np
+import pims
+from scipy.interpolate import make_interp_spline
+from scipy.integrate import cumulative_trapezoid
+from scipy.ndimage import map_coordinates, uniform_filter1d,  gaussian_filter1d
+%matplotlib inline
+Range-Energy Comparison:
+E_M = [3.60, 3.52, 4.22, 3.79]
+Range_M = [2.17, 2.10, 2.75, 2.34]
+E_Know = 4.012
+R_Kno = np.linspace(0, 10, 500)
+rho_medium = 0.0015478318
+A_medium = 3.8064913117
+G_air =  0.000129191348839
+E = ((R_Kno * rho_medium) / (A_medium * G_air)) ** (2 / 3)
+plt.scatter(Range_M, E_M, color="Black", label="Alpha Particle Range and Energy")
+plt.plot(R_Kno, E, label=r"Theory", color="Orange", linewidth=2)
+E_Known = (0, 6)
+y_coords = (4.012, 4.012)
+plt.plot(E_Known, y_coords, color="Blue", marker="o", linestyle="-", label="Recognized Initial Kinetic Energy of Thorium-232 (4.012 MeV)")
+plt.xlabel('Range (cm)')
+plt.ylabel('Initial Kinetic Energy (MeV)')
+plt.legend( loc='center left', bbox_to_anchor=(1.02, 0.5), frameon=False)
+plt.xlim(0,6)
+plt.ylim(3, 5)
+plt.title('Range-Energy Comparison')
+plt.savefig("Range-Energy (Range)")
+plt.show()
+Count = [1, 2, 3, 4]
+E_Known = (0, 7)
+y_coords = (4.012, 4.012)
+plt.scatter(Count, E_M, color="Black", label="Alpha Particle Energy")
+plt.plot(E_Known, y_coords, color="Blue", marker="o", linestyle="-", label="Recognized Initial Kinetic Energy of Thorium-232")
+plt.xlabel('Alpha Particle Count', fontsize=15)
+plt.ylabel('Initial Kinetic Energy (MeV)', fontsize=15)
+plt.xlim(0,4.5)
+plt.ylim(0, 6)
+plt.title('Range-Energy Comparison - Count Version', fontsize=15)
+plt.savefig("Range-Energy (Count)")
+plt.show()
+R_avg = sum(Range_M) / len(Range_M)
+print("Average range of 4 Alpha Particles:", R_avg, "cm")
+E_avg = sum(E_M) / len(E_M)
+print("Average energy of 4 Alpha Particles:", E_avg, "MeV")
+Bragg Peak code:
+@pims.pipeline
+def gray(image):
+    return image[:, :, 1]   # green channel
+#Green is a common choice for camera images because many sensors have the most pixels, and so the best signal, in green.
+frames1 = gray(pims.open('AlphaParticlePics/ezgif-frame-*.png'))
+frames2 = gray(pims.open('AlphaParticlePics2/ezgif-frame-*.png'))
+print(len(frames2), frames2[0].shape)
+print(len(frames1), frames1[0].shape)
+#counts every third frame (38 frames).
+bg1 = np.median([frames1[i] for i in range(0, len(frames1), 3)], axis=0)
+bg2 = np.median([frames2[i] for i in range(0, len(frames2), 6)], axis=0)
+#takes the median brightness of each pixel position across all 38. An alpha track covers a given pixel in only a few frames, so the median ignores it. What is left is the unchanging scene: the rod, the crosshairs, the lighting gradient and the texture of the chamber floor. That is the background image.
+print(bg1.shape, bg2.shape)
+sel = [(1,5), (1, 15), (1, 17), (1, 26), (1, 27), (1, 77), (1, 92), (1, 100)]
+#(folder, frame)
+ntr = {}   
+#A dictionary of "number of tracks", empty for now. Used for when there are frames with multiple alpha particles (not used)
+results = {(2, 41): [((1003, 577), (1182, 417))]}
+for key in sel:
+    #folder k and frame number fi: looks up the number of tracks, using 1 if the frame isn't in ntr and fetches that folder's frames and background from the dictionary F (see the Brightness profile section for where F comes from).
+    k, fi = key; nt = ntr.get(key, 1); fr, bg = F[k]
+    #F is the dictionary that bundles each folder's frames with its background.
+    d = np.clip(fr[fi].astype(float) - bg, 0, None)
+    #converts to pixel, then 0, None just makes sure that the background subtraction doesn't make negative pixel values
+    plt.figure(figsize=(14, 8)); plt.imshow(d, cmap="gray", vmax=np.percentile(d, 99.9))
+    #vmax sets which brightness is drawn as pure white. np.percentile(d, 99.9) is the brightness that only 0.1% of pixels exceed, so a few extremely bright pixels cannot make the rest look dark.
+    plt.title(f"folder {k}, frame {fi}: click {2*nt} points (start, tip) per track")
+    pts = [(round(x), round(y)) for x, y in plt.ginput(2 * nt, timeout=0)]; plt.close()
+    #plt.ginput waits for that many mouse clicks and returns them as (x, y) decimals.
+    for j in range(nt):
+        p0, p1 = pts[2*j], pts[2*j+1]
+        # Track j uses clicks number 2j and 2j+1. The first is the start, the second is the tip. 
+        #reads an image at arbitrary positions (it is how a track gets straightened)
+        cut = map_coordinates(fr[fi].astype(float),
+                              [np.linspace(p0[1], p1[1], 300), np.linspace(p0[0], p1[0], 300)], order=1)
+        #makes 300 numbers from a to b, once for the y positions and once for the x positions. blends neighboring pixels linearly when a point lands between them. The result is 300 brightness values along the track.
+        print(key, p0, p1, "| length px:", round(np.hypot(p1[0]-p0[0], p1[1]-p0[1])), "| clipped:", int((cut >= 250).sum()))
+        #np.hypot(dx, dy) is the Pythagorean distance, the straight-line length in pixels. 
+        results.setdefault(key, []).append((p0, p1))
+print(results)
+clean = {(2, 41): ((1003, 577), (1182, 417)), (1, 5): ((913, 463), (1077, 511)), (1, 15): ((911, 570), (990, 591)), (1, 17): ((891, 571), (787, 656)), (1, 26): ((904, 589), (999, 720)), (1, 27): ((906, 587), (992, 722)), (1, 77): ((867, 598), (780, 750)), (1, 92): ((907, 237), (865, 127)), (1, 100): ((907, 582), (990, 697))}
+bgs = {1: bg1, 2: bg2}
+
+grid = np.arange(0, 320, 2.0); stack = []
+plt.figure(figsize=(10, 5))
+for (k, fi), (p0, p1) in clean.items():
+    cut, s, offs = straighten(F[k][0][fi], p0, p1)
+    bgc, _, _ = straighten(bgs[k], p0, p1)
+    d = cut - bgc; flank = d[np.abs(offs) >= 20].mean(0)
+    #uniform_filter1d takes a moving average along a line
+    prof = uniform_filter1d((d[np.abs(offs) <= 15] - flank).sum(0), 5)
+    prof = prof / prof[10:-10].mean()                 # normalize each track to its own mean
+    r = s[-1] - s # px from the tip
+    plt.plot(r, prof, alpha=0.4, label=f"{k},{fi}")
+    stack.append(np.interp(grid, r[::-1], prof[::-1], right=np.nan))
+mean = np.nanmean(stack, 0)
+plt.plot(grid, mean, "k", lw=2.5, label="mean"); plt.gca().invert_xaxis()
+plt.xlabel("Distance from tip (px)"); plt.ylabel("Relative brightness"); plt.legend(); plt.show()
+drop = {(1, 5), (1, 15), (1, 92), (1, 77)}               
+grid = np.arange(0, 171, 2.0); stack = []
+plt.figure(figsize=(10, 5))
+for (k, fi), (p0, p1) in clean.items():
+    if (k, fi) in drop: continue
+    cut, s, offs = straighten(F[k][0][fi], p0, p1)
+    #straighen cuts a strip out of an image along the line from p0 to p1, reaching half pixels (default 25) to each side.
+    bgc, _, _ = straighten(bgs[k], p0, p1)
+    d = cut - bgc; flank = d[np.abs(offs) >= 20].mean(0)
+    prof = uniform_filter1d((d[np.abs(offs) <= 15] - flank).sum(0), 5)
+    r = s[-1] - s
+    prof = prof / prof[(r >= 80) & (r <= 140)].mean()       # same window for every track
+    plt.plot(r, prof, alpha=0.4, label=f"{k},{fi}")
+    stack.append(np.interp(grid, r[::-1], prof[::-1]))      # all kept tracks are at least 177 px long
+S = np.array(stack); mean = S.mean(0); sem = S.std(0, ddof=1) / np.sqrt(len(S))
+plt.errorbar(grid, mean, sem, color="k", lw=2, label="mean ± s.e.m."); plt.xlim(175, 0)
+plt.xlabel("Distance from tip (px)"); plt.ylabel("Relative brightness"); plt.legend(); plt.show()
+print("tip/mid ratio:", round(mean[(grid >= 10) & (grid <= 40)].mean(), 2))
+e=1.602176634e-19
+eps0=8.8541878128e-12
+me=9.1093837e-31
+c=2.99792458e8
+m_a=6.644657e-27
+MeV=1.602176634e-13
+
+def S_bethe(E, n_e, I_eV, z=2):
+    I = I_eV*e
+    b2 = 1-(1+E*MeV/(m_a*c**2))**-2
+    b  = np.sqrt(b2)
+    zeff2 = z**2*(1-np.exp(-125*b/z**(2/3)))**2           # effective charge -> peak drops
+    L = np.log(2*me*c**2*b2/(I*(1-b2)))-b2
+    return 4*np.pi*n_e*zeff2/(me*c**2*b2)*(e**2/(4*np.pi*eps0))**2*L/(MeV*100)   # MeV/cm
+
+def bragg(E0_MeV, n_e, I_eV, Ec=0.5):
+    E = np.linspace(E0_MeV, Ec, 20000); S = S_bethe(E, n_e, I_eV)
+    Elo = np.linspace(Ec, 1e-4, 4000); Slo = S[-1]*np.sqrt(Elo/Ec)   # S ~ sqrt(E) below Ec
+    E = np.concatenate([E, Elo[1:]]); S = np.concatenate([S, Slo[1:]])
+    x = np.concatenate([[0], np.cumsum(0.5*(1/S[1:]+1/S[:-1])*(E[:-1]-E[1:]))])   # cm
+    return x, S, E
+
+# Medium from your Range-Energy cell: rho_medium = 0.0015478 g/cm^3, A_medium = 3.806 (= sqrt(A), A ~ 14.5, air-like)
+Z_over_A = 0.4992            # dry air
+I_eV = 85.7                  # mean excitation energy of air
+n_e = rho_medium*1e6 * 6.02214076e23 * Z_over_A      # electrons per m^3
+x, S, E = bragg(E_Know, n_e, I_eV)
+print(f"n_e = {n_e:.3e} m^-3;  range = {x[-1]:.2f} cm;  peak {x[-1]-x[S.argmax()]:.2f} cm from the end")
+plt.plot(x, S); plt.xlabel("Penetration distance (cm)"); plt.ylabel("S (MeV/cm)"); plt.show()
+t warnings
+px_per_cm = 61.9
+max_px = 130            # plot window (px): every kept track is at least 134 px long, so all tracks are present everywhere
+win = (60, 120)         # normalization window (px from the tip), inside the plot window
+blur_px = 8             # optical/track blur applied to the theory (free parameter)
+tip_offset_cm = 0.0     # leave at 0 unless you can justify a shift
+drop = {(1, 5), (1, 15), (1, 92), (2, 41), (1, 77)}
+
+# ---- measured profiles (tip-aligned, each normalized to the same window)
+keep = [key for key in clean if key not in drop]
+grid_px = np.arange(0, max_px + 1, 2.0); grid_cm = grid_px / px_per_cm
+tracks = []
+for key in keep:
+    k, fi = key; p0, p1 = clean[key]
+    cut, s, offs = straighten(F[k][0][fi], p0, p1)
+    bgc, _, _ = straighten(bgs[k], p0, p1)
+    d = cut - bgc; flank = d[np.abs(offs) >= 20].mean(0)
+    prof = uniform_filter1d((d[np.abs(offs) <= 15] - flank).sum(0), 5)
+    r = s[-1] - s
+    prof = prof / prof[(r >= win[0]) & (r <= win[1])].mean()
+    tracks.append(np.interp(grid_px, r[::-1], prof[::-1], right=np.nan))
+tracks = np.array(tracks)
+mean = tracks.mean(0); sem = tracks.std(0, ddof=1) / np.sqrt(len(tracks))
+print("tracks used:", keep)
+
+# ---- theory: medium and E0 from the Range-Energy cell (n_e, I_eV, E_Know), same normalization window
+x_th, S_th, E_th = bragg(E_Know, n_e, I_eV)
+print(f"theory range: {x_th[-1]:.2f} cm (measured ranges: {min(Range_M):.2f}-{max(Range_M):.2f} cm)")
+r_cm = (x_th[-1] - x_th) + tip_offset_cm
+rg = np.arange(-0.7, 5.0, 0.01)
+Sg = np.interp(rg, r_cm[::-1], S_th[::-1], left=0.0)
+#gaussian_filter1d blurs a line of numbers with a bell-shaped kernel
+Sg = gaussian_filter1d(Sg, blur_px / px_per_cm / 0.01)
+Sg /= Sg[(rg >= win[0]/px_per_cm) & (rg <= win[1]/px_per_cm)].mean()
+plt.figure(figsize=(10, 10))
+# ---- plot: distance from the tip (tip = 0 at the right), axes sized to the data
+D = max_px / px_per_cm
+ymax = 1.1 * max(np.nanmax(tracks), Sg.max())
+for key, t in zip(keep, tracks):
+    plt.plot(grid_cm, t, lw=1.2, alpha=0.45, label=f"track {key}")
+plt.plot(grid_cm, mean, color="k", lw=2, label="Mean")
+plt.plot(rg, Sg, "C3", lw=2.5, label="Theoretical model - Bethe-Bloch with effective charge")
+plt.axvline(0, color="gray", ls=":", lw=1)
+plt.xlim(D + 0.005, -.01); plt.ylim(0, ymax)
+plt.xlabel("Distance from tip (cm)", fontsize=20); plt.ylabel("Relative stopping power (MeV/cm)", fontsize=20)
+plt.title("Bragg curve of 4 distinct alpha particles from thoriated tungsten", fontsize = 20)
+plt.legend(fontsize=12.5, ncol=2, loc="lower left")
+plt.savefig("Bragg Peak.png")
+plt.show()
